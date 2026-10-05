@@ -1,5 +1,6 @@
 import { createDnsRecord, deleteDnsRecord, listMxRecords } from "@/lib/cloudflare-dns";
 import { isManualZone } from "@/lib/domains/provision";
+import { queryDns } from "@/lib/dns-query";
 import type { CfDnsRecord } from "@/lib/cloudflare-api.types";
 import type { DomainRow } from "@/lib/domains/types";
 
@@ -21,9 +22,21 @@ export async function listDomainMx(env: CloudflareEnv, domain: DomainRow): Promi
 	return listMxRecords(env, domain.zoneId, domain.hostname);
 }
 
-/** Whether an MX record for `content` is in the zone; null when DNS is manual. */
+/** Checks public DNS for manual domains; null means the lookup failed. */
 export async function hasMx(env: CloudflareEnv, domain: DomainRow, content: string): Promise<boolean | null> {
-	if (isManualZone(domain.zoneId)) return null;
+	if (isManualZone(domain.zoneId)) {
+		try {
+			const answers = await queryDns(domain.hostname, "MX");
+			const hosts = answers.flatMap((answer) => {
+				const match = /^\d+\s+(\S+)\s*$/.exec(answer.trim());
+				return match ? [match[1]] : [];
+			});
+			// Other providers' MX records can send mail away from this receiver.
+			return hosts.length > 0 && hosts.every((host) => same(host, content));
+		} catch {
+			return null;
+		}
+	}
 	return (await listDomainMx(env, domain)).some((record) => same(record.content ?? "", content));
 }
 
