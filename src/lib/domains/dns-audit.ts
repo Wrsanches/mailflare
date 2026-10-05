@@ -1,5 +1,6 @@
 import type { CfDnsRecord } from "@/lib/cloudflare-api.types";
 import { queryDns, type DnsQueryType } from "@/lib/dns-query";
+import type { ResendDomainView } from "@/lib/domains/resend-domain-types";
 
 export type DnsAuthRecord = "mx" | "spf" | "dkim" | "dmarc";
 export type DnsAuthStatus = "ok" | "missing" | "unknown";
@@ -23,10 +24,45 @@ type AuditInput = {
 	routing: { records: CfDnsRecord[]; missing: CfDnsRecord[] };
 	sending: CfDnsRecord[];
 	dkimSelector?: string;
+	/** The selected Resend sender's required records, including its return-path SPF. */
+	resendSending?: ResendDomainView["records"];
 };
 
 function isTxt(record: CfDnsRecord) {
 	return record.type?.toUpperCase() === "TXT";
+}
+
+async function checkResendRecords(
+	hostname: string,
+	record: "spf" | "dkim",
+	records: ResendDomainView["records"],
+): Promise<DnsAuthCheck> {
+	const label = record.toUpperCase();
+	const expected = records.filter((item) => item.record.toUpperCase() === label);
+	const absoluteName = (name: string) => {
+		const normalized = name.trim().replace(/\.$/, "").toLowerCase();
+		return !normalized || normalized === "@" ? hostname
+			: normalized === hostname || normalized.endsWith(`.${hostname}`) ? normalized : `${normalized}.${hostname}`;
+	};
+	const normalize = (value: string) => value.replace(/^"|"$/g, "").trim().replace(/\.$/, "");
+	const results = await Promise.all(expected.map(async (item) => {
+		const name = absoluteName(item.name);
+		try {
+			const answers = await queryDns(name, item.type);
+			const wanted = item.type === "MX" ? `${item.priority ?? 10} ${item.value}` : item.value;
+			const found = answers.filter((answer) => item.type === "TXT"
+				? normalize(answer) === normalize(wanted)
+				: normalize(answer).toLowerCase() === normalize(wanted).toLowerCase());
+			return { name, found, status: found.length ? "ok" as const : "missing" as const };
+		} catch { return { name, found: [], status: "unknown" as const }; }
+	}));
+	return {
+		record, label,
+		name: [...new Set(results.map((item) => item.name))].join(", ") || hostname,
+		status: results.some((item) => item.status === "missing") ? "missing"
+			: !results.length || results.some((item) => item.status === "unknown") ? "unknown" : "ok",
+		found: results.flatMap((item) => item.found),
+	};
 }
 
 async function check(
@@ -67,11 +103,15 @@ export async function auditDomainDns(
 
 	const [mx, spf, dmarc] = await Promise.all([
 		check("mx", "MX", hostname, "MX", (value) => !/^0\s*\.?$/.test(value.trim())),
-		check("spf", "SPF", hostname, "TXT", (value) => /v=spf1/i.test(value)),
+		view.resendSending !== undefined
+			? checkResendRecords(hostname, "spf", view.resendSending)
+			: check("spf", "SPF", hostname, "TXT", (value) => /v=spf1/i.test(value)),
 		check("dmarc", "DMARC", `_dmarc.${hostname}`, "TXT", (value) => /v=DMARC1/i.test(value)),
 	]);
 
-	const dkim: DnsAuthCheck = dkimName
+	const dkim: DnsAuthCheck = view.resendSending !== undefined
+		? await checkResendRecords(hostname, "dkim", view.resendSending)
+		: dkimName
 		? await check("dkim", "DKIM", dkimName, "TXT", () => true)
 		: {
 				record: "dkim",
