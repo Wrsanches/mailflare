@@ -6,17 +6,11 @@ export function getSetupRequirementChecks(env: CloudflareEnv): SetupRequirementC
 	const hasGlobalKey = !!env.CF_API_KEY?.trim() && !!env.CF_EMAIL?.trim();
 
 	if (isNodeRuntime(env)) {
-		const mailer = env.EMAIL as unknown as { configured?: boolean };
 		return [
 			{
 				key: "Database",
 				configured: !!env.DB,
 				message: "DATA_DIR must be writable; the SQLite database is created there on start.",
-			},
-			{
-				key: "Outbound mail",
-				configured: mailer?.configured === true,
-				message: "Set SMTP_URL, or CF_ACCOUNT_ID with CF_TOKEN to send through Cloudflare. Receiving works without it.",
 			},
 			{
 				key: "Cloudflare API credentials (optional)",

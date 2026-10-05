@@ -55,6 +55,8 @@ export async function hasConflictingMxRecords(
 	zoneId: string,
 	hostname: string,
 ): Promise<boolean> {
+	// Registration does not change DNS for manually managed domains.
+	if (zoneId === "manual") return false;
 	const records = await listMxRecords(env, zoneId, hostname);
 	return records.some((record) => !isCloudflareEmailRoutingMx(record));
 }

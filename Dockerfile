@@ -34,7 +34,6 @@ COPY --chown=node:node --from=build /app/package.json /app/next.config.ts ./
 COPY --chown=node:node --from=build /app/src/lib/security/headers.ts ./src/lib/security/headers.ts
 RUN mkdir -p /data && chown node:node /data
 USER node
-VOLUME ["/data"]
 EXPOSE 3000 25
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s CMD node -e "fetch('http://127.0.0.1:'+(process.env.PORT||3000)+'/api/setup/status').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 CMD ["node", "dist/server.mjs"]
